@@ -1,0 +1,979 @@
+int Game::other_index(int i)
+{
+	IF i EQUALS 0:
+		RETURN 1
+	ELSE:
+		RETURN 0
+}
+
+Game::Game(const Player& player_1, const Player& player_2, random_device& main_random_device, int first_player = -1) :
+	players({ {&player_1, &player_2} }),
+	score(Score(player_1.get_id(), player_2.get_id(), 501)),
+	dartboard(Dartboard(rd)),
+	rd(main_random_device),
+	dist_start(uniform_int_distribution<int>(0, 1))	
+{
+	SET first_player_index TO dist_start(rd) IF first_player IS LESS THAN 0 ELSE first_player
+}
+
+int Game::play_game()
+{
+	INITIALIZE bool game_won AS FALSE
+	INITIALIZE int player_index AS 0
+	
+	DO
+		FOR i FROM 0 TO 1 IF game_won IS FALSE {
+			IF first_player_index EQUALS 0:
+				SET player_index TO i
+			ELSE:
+				SET player_index TO other_index(i)
+			SET game_won TO play_round(player_index)
+	WHILE game_won IS FALSE
+
+	SET first_player_index TO other_index(first_player_index)
+	
+	score.reset()
+	
+	RETURN player_index
+}
+
+
+
+bool SimulatedGame::play_round(int player_index)
+{
+	INITIALIZE const Player* player AS players[player_index]
+	INITIALIZE int player_id AS player->get_id()
+	INITIALIZE int starting_score AS score.get_score(player->get_id())
+	INITIALIZE int total_value AS 0
+
+	INITIALIZE bool round_over AS false
+	INITIALIZE int target_hit AS -1
+	INITIALIZE int throw_value AS 0
+	
+	FOR i FROM 3 TO 1 IF round_over IS FALSE:
+		SET target_hit TO player->select_and_throw(dartboard, starting_score - total_value, i, starting_score)
+		IF target_hit EQUALS -1:
+			SET throw_value TO 0
+		ELSE:
+			SET throw_value TO Dartboard::get_targets()[target_hit]->get_value()
+		
+		ADD throw_value TO total_value
+		IF score.check_bust(player_id, total_value):
+			SET round_over TO true
+			SET total_value TO 0
+		ELSE IF score.check_win(player_id, total_value):
+			IF Dartboard::get_targets()[target_hit]->get_multiplier() DOES NOT EQUAL 2:
+				SET total_value TO 0
+			SET round_over TO true
+
+	RETURN score.update(player_id, total_value)
+}
+
+int SimulatedGame::play_set(int set_length)
+{
+	INITIALIZE array<int, 2> wins AS { 0, 0 }
+	INITIALIZE int set_winner_index AS -1
+
+	INITIALIZE int game_winner_index = -1
+	DO
+		SET game_winner_index TO play_game()
+		INCREMENT wins[game_winner_index] BY 1
+		IF wins[game_winner_index] >= (set_length + 1) / 2:
+			SET set_winner_index TO game_winner_index
+	WHILE set_winner_index IS LESS THAN 0
+
+	RETURN set_winner_index
+}
+
+void SimulatedGame::play_match(int match_length, int set_length)
+{
+	INITIALIZE int win_threshold AS (match_length PLUS 1) DIVIDED BY 2
+	INITIALIZE array<int, 2> result
+	INITIALIZE bool match_won AS FALSE
+	
+	INITIALIZE int set_winner_index AS -1
+	DO
+		SET set_winner_index TO play_set(set_length)
+		INCREMENT result[set_winner_index] BY 1
+		IF result[set_winner_index] IS NOT LESS THAN win_threshold:
+			INCREMENT simulation_results[set_winner_index][result[other_index(set_winner_index)]] BY 1
+			SET match_won TO true
+	WHILE match_won IS FALSE
+}
+
+int SimulatedGame::play_game_single_player(int player_id)
+{
+	INITIALIZE int player_index AS -1
+	FOR i FROM 0 TO 1:
+		IF players[i]->get_id() EQUALS player_id:
+			SET player_index TO i
+
+	INITIALIZE int rounds AS 0
+	INITIALIZE bool game_over AS false
+	DO
+		SET game_over TO play_round(player_index)
+		rounds++
+	WHILE game_over IS FALSE
+
+	score.reset()
+	RETURN rounds
+}
+
+SimulatedGame::SimulatedGame(const Player& player_1, const Player& player_2,
+							 random_device& main_random_device, int first_player = -1) :
+	Game(player_1, player_2, main_random_device, first_player)
+{
+}
+
+void SimulatedGame::run_simulation_single_player(int num_simulations, int player_id)
+{
+	SET simulations_run TO 0
+	
+	REPEAT num_simulations TIMES:
+		ADD play_game_single_player(player_id) to simulations_run
+
+	OUTPUT "Average rounds needed to finish (based on " + num_simulations + " games): " + simulations_run DIVIDED BY num_simulations + NEWLINE
+}
+
+void SimulatedGame::run_simulation(int num_simulations, int match_length, int set_length)
+{
+	simulation_results.clear()
+	REPEAT 2 TIMES:
+		APPEND vector<int> WITH SIZE ((match_length + 1) / 2) TO simulation_results
+		
+	SET simulations_run TO 0
+	
+	REPEAT num_simulations TIMES:
+		play_match(match_length, set_length)
+		INCREMENT simulations_run BY 1
+}
+
+void SimulatedGame::output_results()
+{
+
+	INITIALIZE int max_occurence AS -1
+	INITIALIZE int most_likely_winner AS -1
+	INITIALIZE int most_likely_margin AS -1
+
+	FOR i FROM 0 TO 1:
+		FOR j FROM 0 TO simulation_results[0].size() - 1:
+			IF simulation_results[i][j] IS GREATER THAN max_occurence:
+				SET max_occurence TO simulation_results[i][j]
+				SET most_likely_winner TO i
+				SET most_likely_margin TO j
+
+	OUTPUT players[0]->get_name() + " : " + players[1]->get_name() + " - Likelihood based on " + simulations_run + " matches" + NEWLINE
+	OUTPUT "--------------------" + NEWLINE
+
+	FOR i FROM 0 TO 1:
+		FOR j FROM 0 TO simulation_results[0].size() - 1:
+			IF i EQUALS 0:
+				OUTPUT simulation_results[0].size() + " : " + j + " - "
+			ELSE IF i EQUALS 1:
+				OUTPUT j + " : " + simulation_results[0].size() + " - "
+			OUTPUT (simulation_results[i][j] DIVIDED BY simulations_run) TIMES 100 + "%"
+			IF i EQUALS most_likely_winner AND j EQUALS most_likely_margin:
+				OUTPUT " [Most likely result]"
+			OUTPUT NEWLINE
+}
+
+
+
+void InteractiveGame::render_score(int current_player_id, int score_current_round) {
+	FOR const Player* p IN players:
+		SET int player_id TO p->get_id()
+		SET int current_score TO score.get_score(p->get_id())
+		IF player_id EQUALS current_player_id:
+			SUBTRACT score_current_round FROM current_score
+			OUTPUT p->get_name() + ": " + current_score + "    " IN GREEN
+		ELSE:
+			OUTPUT p->get_name() + ": " + current_score + "    "
+	OUTPUT 2 NEWLINES
+}
+
+void InteractiveGame::render_dartboard()
+{
+	FOR const string& line IN ascii_dartboard
+		OUTPUT line
+		OUTPUT NEWLINE
+	OUTPUT NEWLINE
+}
+
+void InteractiveGame::render_target(int target, bool colour)
+{
+	IF target IS LESS THAN 0:
+		RETURN
+	FOR i FROM 0 TO 1:
+		FOR j FROM 0 TO 1:
+			ConsoleInterface::move_cursor(target_locations[target][0] + i, target_locations[target][1] + j + 2)
+			IF colour IS TRUE:
+				OUTPUT ascii_dartboard[target_locations[target][1] + j][target_locations[target][0] + i] IN GREEN
+			ELSE:
+				OUTPUT ascii_dartboard[target_locations[target][1] + j][target_locations[target][0] + i]
+}
+
+void InteractiveGame::clear_below() 
+{
+	ConsoleInterface::move_cursor(0, 43)
+	ConsoleInterface::clear_screen(4)
+	ConsoleInterface::move_cursor(0, 43)
+}
+
+bool InteractiveGame::play_round(int player_index)
+{
+	SET const Player* player TO players[player_index]
+	SET int player_id TO player->get_id()
+	SET int starting_score TO score.get_score(player_id)
+	SET int total_value TO 0
+
+	ConsoleInterface::move_cursor(0, 0)
+	render_score(player_id, total_value)
+	render_dartboard()
+
+	SET bool round_over TO FALSE
+	SET int target_hit TO -1
+	SET int throw_value TO 0
+	FOR i FROM 3 TO 1 IF round_over IS FALSE:
+		ConsoleInterface::move_cursor(0, 43)
+		SET target_hit TO player->select_and_throw(dartboard, starting_score - total_value, i, starting_score)
+		SET throw_value TO 0 IF target_hit EQUALS -1 ELSE Dartboard::get_targets()[target_hit]->get_value()
+		ADD throw_value TO total_value
+		clear_below()
+		render_target(target_hit, true)
+		IF score.check_bust(player_id, total_value):
+			SET total_value TO 0
+			SET round_over TO true
+		ELSE IF score.check_win(player_id, total_value):
+			IF Dartboard::get_targets()[target_hit]->get_multiplier() EQUALS 2:
+				clear_below()
+				OUTPUT "Winner: " + player->get_name() + NEWLINE
+			ELSE
+				SET total_value TO 0
+			SET round_over TO true
+		ConsoleInterface::move_cursor(0, 0)
+		render_score(player_id, total_value)
+		std::this_thread::sleep_for(std::chrono::milliseconds(500))
+		render_target(target_hit, false)
+		ConsoleInterface::move_cursor(0, 43)
+		OUTPUT NEWLINE
+	}
+	RETURN score.update(player_id, total_value)
+}
+
+InteractiveGame::InteractiveGame(const Player& player_1, const Player& player_2,
+								 random_device& main_random_device, int first_player = -1) :
+	Game(player_1, player_2, main_random_device, first_player)
+{
+}
+
+
+
+Score::Score(int player1_id, int player2_id, int game_starting_score) :
+	starting_score(game_starting_score)
+{
+	INSERT player1_id, starting_score INTO scores
+	INSERT player2_id, starting_score INTO scores
+}
+
+int Score::get_score(int id) {
+	RETURN scores[id]
+}
+
+bool Score::check_bust(int id, int amount) {
+	INITIALIZE int resulting_score AS scores[id] - amount
+	IF resulting_score EQUALS 1 OR IS LESS THAN 0:
+		RETURN TRUE
+	ELSE:
+		RETURN FALSE
+}
+
+bool Score::check_win(int id, int amount) {
+	IF scores[id] EQUALS amount:
+		RETURN TRUE
+	ELSE:
+		RETURN FALSE
+}
+
+bool Score::update(int id, int amount) {
+	INITIALIZE current_score AS scores[id]
+	INITIALIZE resulting_score AS current_score - amount
+	IF resulting_score IS NOT GREATER THAN 501 AND EITHER GREATER THAN 1 OR EQUAL TO 0:
+		SET scores[id] TO resulting_score
+		IF resulting_score EQUALS 0:
+			RETURN TRUE
+		ELSE:
+			RETURN FALSE
+	ELSE:
+		RETURN FALSE
+}
+
+void Score::reset()
+{
+	FOR EACH pair<const int, int> p IN scores:
+		SET p.second TO starting_score
+}
+
+
+
+int Dartboard::throw_single(int base)
+{
+	INITIALIZE int rand_percent AS dist_percent(random_device)
+	
+	IF base EQUALS 25:
+		IF rand_percent IS LESS THAN 80:
+			RETURN get_target_index(25, 1)
+		ELSE IF rand_percent IS LESS THAN 90:
+			RETURN get_target_index(25, 2)
+		ELSE:
+			RETURN get_target_index(dist_section(random_device), 1)
+	ELSE:
+		IF rand_percent IS LESS THAN 88:
+			RETURN get_target_index(base, 1)
+		ELSE IF rand_percent IS LESS THAN 92:
+			RETURN get_target_index(neighbours[0][base], 1)
+		ELSE IF rand_percent IS LESS THAN 96:
+			RETURN get_target_index(neighbours[1][base], 1)
+		ELSE IF rand_percent IS LESS THAN 98:
+			RETURN get_target_index(base, 2)
+		ELSE:
+			RETURN get_target_index(base, 3)
+}
+
+int Dartboard::throw_double(int base)
+{
+	INITIALIZE int rand_percent AS dist_percent(random_device)
+	
+	IF rand_percent IS LESS THAN 80:
+		RETURN get_target_index(base, 2)
+	ELSE IF rand_percent IS LESS THAN 85:
+		RETURN -1
+	ELSE IF rand_percent IS LESS THAN 90:
+		RETURN get_target_index(base, 1)
+	ELSE IF rand_percent IS LESS THAN 93:
+		RETURN get_target_index(neighbours[0][base], 2)
+	ELSE IF rand_percent IS LESS THAN 96:
+		RETURN get_target_index(neighbours[1][base], 2)
+	ELSE IF rand_percent IS LESS THAN 98:
+		RETURN get_target_index(neighbours[0][base], 1)
+	ELSE:
+		RETURN get_target_index(neighbours[1][base], 1)
+}
+
+int Dartboard::throw_triple(int base, int accuracy)
+{
+	INITIALIZE int rand_percent AS dist_percent(random_device)
+	
+	IF rand_percent IS LESS THAN accuracy:
+		RETURN get_target_index(base, 3)
+	ELSE IF rand_percent IS LESS THAN 90:
+		RETURN get_target_index(base, 1)
+	ELSE IF rand_percent IS LESS THAN 93:
+		RETURN get_target_index(neighbours[0][base], 3)
+	ELSE IF rand_percent IS LESS THAN 96:
+		RETURN get_target_index(neighbours[1][base], 3)
+	ELSE IF rand_percent IS LESS THAN 98:
+		RETURN get_target_index(neighbours[0][base], 1)
+	ELSE:
+		RETURN get_target_index(neighbours[1][base], 1)
+}
+
+int Dartboard::throw_bull(int accuracy)
+{
+	INITIALIZE int rand_percent AS dist_percent(random_device)
+	
+	IF rand_percent IS LESS THAN (accuracy - 20):
+		RETURN get_target_index(25, 2)
+	ELSE IF rand_percent IS LESS THAN 85:
+		RETURN get_target_index(25, 1)
+	ELSE:
+		RETURN get_target_index(dist_section(random_device), 1)
+}
+
+Dartboard::Dartboard(random_device& main_random_device) :
+	random_device(main_random_device) {}
+
+const array<array<int, 21>, 2>& Dartboard::get_neighbours()
+{
+	RETURN neighbours
+}
+
+const array<Target*, 62>& Dartboard::get_targets()
+{
+	IF initialized IS FALSE:
+		Dartboard::initialize()
+	RETURN targets
+}
+
+int Dartboard::get_target_index(int base, int multiplier) {
+	IF base EQUALS 25:
+		RETURN (59 + multiplier)
+	ELSE:
+		RETURN (20 * (multiplier - 1)) + (base - 1)
+}
+
+void Dartboard::initialize()
+{
+	IF initialized IS TRUE:
+		RETURN
+	
+	FOR multiplier FROM 1 TO 3:
+		FOR base FROM 1 TO 20:
+			SET targets[get_target_index(base, multiplier)] TO NEW Target(base, multiplier)
+	FOR multiplier FROM 1 TO 2:
+		SET targets[get_target_index(25, multiplier)] TO NEW Target(25, multiplier)
+	
+	SET initialized TO TRUE	
+}
+
+int Dartboard::throw_by_target(int target, int accuracy)
+{
+	SET base TO targets[target]->get_base()
+	SET multiplier TO targets[target]->get_multiplier()
+	
+	IF multiplier EQUALS 1:
+		RETURN throw_single(base)
+	ELSE IF multiplier EQUALS 2:
+		IF base EQUALS 25:
+			RETURN throw_bull(accuracy)
+		ELSE:
+			RETURN throw_double(base)
+	ELSE IF multiplier EQUALS 3:
+		RETURN throw_triple(base, accuracy)
+	ELSE:
+		RETURN -1
+}
+
+
+
+Target::Target(int target_base, int target_multiplier) :
+	base(target_base),
+	multiplier(target_multiplier),
+	value(target_base TIMES target_multiplier) {}
+
+
+int Target::get_base()
+{
+	RETURN base
+}
+
+int Target::get_multiplier()
+{
+	RETURN multiplier
+}
+
+int Target::get_value()
+{
+	RETURN value
+}
+
+
+
+Player::Player(const string& player_name, int player_accuracy, char strategy_type) :
+	name(player_name), accuracy(player_accuracy)
+{
+	INCREMENT current_id BY 1
+	SET id TO current_id
+	
+	IF strategy_type EQUALS 'e':
+		SET strategy TO NEW EnhancedStrategy()
+	ELSE IF strategy_type EQUALS 'b':
+		SET strategy TO NEW BasicStrategy()
+	ELSE IF strategy_type EQUALS 'i':
+		SET strategy TO NEW InteractiveStrategy()
+}
+
+int Player::select_and_throw(const Dartboard& dartboard, int score, int darts_remaining, int starting_score)
+{
+	INITIALIZE int best_throw AS strategy->select_target(score, darts_remaining, starting_score)
+	RETURN dartboard.throw_by_target(best_throw, accuracy)
+}
+
+Player::~Player()
+{
+	DELETE strategy
+}
+
+int Player::get_id()
+{
+	RETURN id
+}
+
+const string& Player::get_name()
+{
+	RETURN name
+}
+
+int Player::get_accuracy()
+{
+	RETURN accuracy
+}
+
+
+
+int InteractiveStrategy::select_target(int, int, int)
+{
+	INITIALIZE int base AS 0
+	INITIALIZE int multiplier AS 0
+	OUTPUT "Enter throw multiplier (1 = single, 2 = double, 3 = triple): "
+	GET multiplier FROM INPUT
+	OUTPUT "Enter throw base (1-20, 25 for bull): "
+	GET base FROM INPUT
+
+	IF multiplier IS LESS THAN 1 OR GREATER THAN 3:
+		SET multiplier TO 3
+	IF base IS LESS THAN 1 OR (GREATER THAN 20 AND NOT 25) OR (EQUALS 25 AND multiplier EQUALS 3):
+		SET base TO 20
+		
+	RETURN Dartboard::get_target_index(base, multiplier)
+}
+
+
+
+void BasicStrategy::calulate_best_throw(int score)
+{
+	INITIALIZE bool done AS FALSE
+	FOR d FROM 2 TO 50 WITH STEP 2 EXCLUDING 42, 44, 46, 48 AND done IS FALSE:
+		FOR i FROM 0 TO 61 AND done IS FALSE:
+			INITIALIZE value AS Dartboard::get_targets()[i]->get_value()
+			IF score - value EQUALS d:
+				SET best_throws[score] TO i
+				SET done TO TRUE
+}
+
+void BasicStrategy::initialize()
+{
+	IF initialized:
+		RETURN
+	
+	FOR i FROM 2 TO 50 WITH STEP 2 EXCLUDING 42, 44, 46, 48:
+		SET best_throws[i] TO Dartboard::get_target_index(i / 2, 2)
+		
+	FOR i FROM 3 TO 39 WITH STEP 2, 41 TO 110 EXCLUDING 50:
+		calculate_best_throw(i)
+		
+	SET initialized TO TRUE
+}
+
+int BasicStrategy::select_target(int score, int darts_remaining, int starting_score)
+{
+	IF initialized IS FALSE:
+		initialize()
+	
+	IF score IS KEY IN best_throws:
+		RETURN best_throws.at(score)
+	ELSE:
+		RETURN Dartboard::get_target_index(20, 3)
+}
+
+
+
+int EnhancedStrategy::double_to_target_index(int i)
+{
+	IF i EQUALS 20:
+		RETURN 61
+	ELSE:
+		RETURN 20 + i
+}
+
+void keep_ends_d16_d20(vector<vector<int>> &seqs) 
+{	
+	IF seqs IS EMPTY:
+		RETURN
+		
+	INITIALIZE int score AS 0
+	FOR i IN seqs[0]
+		ADD Dartboard::get_targets()[i]->get_value() TO score
+		
+	INITIALIZE int n AS LENTGH OF seqs[0]
+	INITIALIZE vector<int> indices_ends_d16_d20
+	
+	INITIALIZE int base AS 0
+	FOR i FROM 0 TO (LENGTH OF SEQS - 1):
+		SET base TO Dartboard::get_targets()[seqs[i][n - 1]]->get_base()
+		IF base EQUALS 16 OR 20:
+			APPEND i TO indices_ends_d16_d20
+			
+	IF indices_ends_d16_d20 IS NOT EMPTY:
+		FOR i FROM 0 TO indices_ends_d16_d20.size() - 1:
+			SET seqs[i] TO seqs[indices_ends_d16_d20[i]]
+		seqs.resize(indices_ends_d16_d20.size())
+		finish_sequences.at(score).set_ends_d16_d20(true)
+}
+
+int EnhancedStrategy::get_contingency_of_score(int score)
+{
+	IF score EQUALS 1 OR IS LESS THAN 0:
+		RETURN 0
+	ELSE IF score EQUALS 0:
+		RETURN 6
+		
+	INITIALIZE int contingency_score AS 0
+	
+	IF score IS KEY IN finish_sequences:
+		INITIALIZE FinishSequence& finish_seq AS finish_sequences.at(score)
+		ADD 4 - finish_seq.get_length() TO contingency_score
+		IF finish_seq.get_ends_d16_d20():
+			ADD 4 - finish_seq.get_length() TO contingency_score
+	
+	RETURN contingency_score
+}
+
+int EnhancedStrategy::get_contingency_of_seq(const vector<int> &seq)
+{
+	INITIALIZE int score AS 0
+	FOR i IN seqs[0]
+		ADD Dartboard::get_targets()[i]->get_value() TO score
+		
+	INITIALIZE int first_throw AS seq[0]
+	INITIALIZE int score_if_miss AS 0
+	INITIALIZE int contingency_score AS 0
+	
+	IF first_throw EQUALS 60:
+		SET score_if_miss TO score - 50
+		SET contingency_score TO get_contingency_of_score(score_if_miss)
+	ELSE IF first_throw EQUALS 61:
+		SET score_if_miss TO score - 25
+		SET contingency_score TO get_contingency_of_score(score_if_miss)
+	ELSE IF Dartboard::targets[first_throw]->get_multiplier() IS GREATER THAN 1:
+		SET score_if_miss TO score - Dartboard::targets[first_throw]->get_base()
+		SET contingency_score TO get_contingency_of_score(score_if_miss)
+	ELSE:
+		FOR i FROM 0 TO 1:
+			SET score_if_miss TO score - Dartboard::neighbours[i][Dartboard::targets[first_throw]->get_base()]
+			ADD get_contingency_of_score(score_if_miss) TO contingency_score
+		SET contingency_score TO contingency_score DIVIDED BY 2
+		
+	RETURN contingency_score
+}
+
+int EnhancedStrategy::get_best_contingency(const vector<vector<int>> &seqs)
+{
+	INITIALIZE int current_score AS 0
+	INITIALIZE int best_score AS 0
+	
+	FOR seq IN seqs:
+		SET current_score TO get_contingency_of_seq(seq)
+		IF current_score IS GREATER THAN best_score:
+			SET best_score TO current_score
+			
+	RETURN best_score
+}
+
+void EnhancedStrategy::keep_best_contingency(const vector<vector<int>> &seqs)
+{
+	IF seqs IS EMPTY:
+		RETURN
+		
+	INITIALIZE int score AS 0
+	FOR i IN seqs[0]
+		ADD Dartboard::get_targets()[i]->get_value() TO score
+		
+	INITIALIZE int n AS LENTGH OF seqs[0]
+	INTIIALIZE best_contingency_score AS get_best_contingency(seqs)
+	finish_sequences.at(score).set_contingency(best_contingency_score)
+	
+	INITIALIZE vector<int> indices_best_contingency
+	FOR i FROM 0 TO seqs.size() - 1:
+		IF get_contingency_of_seq(seqs[i]) EQUALS best_contingency:
+			APPEND i TO indices_best_contingency
+			
+	FOR i FROM 0 TO indices_best_contingency.size() - 1:
+		SET seqs[i] TO seqs[indices_best_contingency[i]]
+		seqs.resize(indices_best_contingency.size())
+}
+
+const vector<int>& EnhancedStrategy::get_highest_first_value(const vector<vector<int>> &seqs)
+{
+	INITIALISE int current_value, best_value, best_index AS 0
+	
+	FOR i FROM 0 TO seqs.size() - 1:
+		SET current_value TO Dartboard::targets[seqs[i][0]]->get_value()
+		IF current_value IS GREATER THAN best_value:
+			SET best_value TO current_value
+			SET best_index TO i
+	
+	RETURN seqs[best_index]
+}
+
+const vector<int>& get_best_seq(const vector<vector<int>> &seqs)
+{
+	keep_ends_d16_d20(seqs)
+	keep_best_contingency(seqs)
+	RETURN get_highest_first_value(seqs)
+}
+
+void EnhancedStrategy::initialize()
+{
+	IF initialized IS TRUE:
+		RETURN
+		
+	INITIALIZE int throw_values[62]
+	FOR i FROM 0 TO 61:
+		SET throw_values[i] TO Dartboard::get_targets()[i]->get_value()
+
+	INITIALIZE int finish_values_1_dart[21]
+	INITIALIZE int finish_values_2_darts[62][21]
+	INITIALIZE int finish_values_3_darts[62][62][21]
+	
+	FOR i FROM 0 TO 19:
+		SET finish_values_1_dart[i] TO (i + 1) * 2
+	SET finish_values_1_dart[20] TO 50
+		
+	FOR i FROM 0 TO 61:
+		FOR j FROM 0 TO 20:
+			SET finish_values_2_darts[i][j] TO throw_values[i] + finish_values_1_dart[j]
+			
+	FOR i FROM 0 TO 61:
+		FOR j FROM 0 TO 61:
+			FOR k FROM 0 TO 20:
+				SET finish_values_3_darts[i][j][k] TO throw_values[i] + finish_values_2_darts[j][k]
+				
+	INITIALIZE int finish_1 AS -1
+	INITIALIZE vector<vector<int>> finishes_2
+	INITIALIZE vector<vector<int>> finishes_3
+				
+	FOR score FROM 2 TO 170:
+		
+		SET finish_1 TO -1
+		IF score IS BETWEEN 2 AND 50:
+			FOR i FROM 0 TO 20 IF finish_1 IS LESS THAN 0:
+				IF score EQUALS finish_values_1_dart[i]:
+					SET finish_1 TO double_to_target_index(i)
+					finish_sequences[s].set_contingency(get_contingency_of_seq({ finish_1 }))
+		
+		finishes_2.clear()
+		
+		IF score IS BETWEEN 3 AND 100 AND finish_1 IS LESS THAN 0:
+			FOR i FROM 0 TO 61:
+				FOR j FROM 0 TO 20:
+					IF score EQUALS finish_values_2_darts[i][j]:
+						APPEND { i, double_to_target_index(j) } TO finishes_2			
+
+						
+		finishes_3.clear()
+
+		IF score IS BETWEEN 4 AND 170 AND finishes_2 IS EMPTY:
+			FOR i FROM 0 TO 61:
+				FOR j FROM 0 TO 61:
+					FOR k FROM 0 TO 20:
+						IF score EQUALS finish_values_3_darts[i][j][k]:
+							APPEND { i, j, double_to_target_index(k) } TO finishes_3
+							
+		IF finish_1 IS NOT LESS THAN 0:
+			finish_sequences[s].set_sequence({ finish_1 })
+		ELSE IF finishes_2 IS NOT EMPTY:
+			INSERT { s, FinishSequence() } INTO finish_sequences
+			INITIALIZE const vector<int>& best_finish_2_darts AS get_best_seq(finishes_2)
+			finish_sequences.at(s).set_sequence(best_finish_2_darts)
+		ELSE IF finishes_3 IS NOT EMPTY:
+			INSERT { s, FinishSequence() } INTO finish_sequences
+			INITIALIZE const vector<int>& best_finish_3_darts AS get_best_seq(finishes_2)
+			finish_sequences.at(s).set_sequence(best_finish_3_darts)
+
+	SET initialized TO TRUE
+}
+
+int EnhancedStrategy::select_target(int score, int darts_remaining, int starting_score)
+{
+	IF initialized IS FALSE:
+		initialize()
+
+	IF score IS NOT KEY IN finish_sequences:
+		RETURN Dartboard::get_target_index(20, 3)
+	ELSE:
+		IF darts_remaining EQUALS 1 AND SCORE IS LESS THAN 60 AND starting_score IS KEY IN finish_sequences:
+			INITIALIZE int current_finish_length AS finish_sequences.at(score).get_length()
+			INITIALIZE int current_finish_ends_d16_d20 AS finish_sequences.at(score).get_ends_d16_d20()
+			INITIALIZE int current_finish_contingency AS finish_sequences.at(score).get_contingency()
+			INITIALIZE int bust_finish_length AS finish_sequences.at(starting_score).get_length() + 1
+			INITIALIZE int bust_finish_ends_d16_d20 AS finish_sequences.at(starting_score).get_ends_d16_d20()
+			INITIALIZE int bust_finish_contingency AS finish_sequences.at(starting_score).get_contingency()
+
+			IF bust_finish_length IS NOT GREATER THAN current_finish_length AND
+			   bust_finish_ends_d16_d20 IS NOT LESS THAN current_finish_ends_d16_d20 AND
+			   bust_finish_contingency IS GREATER THAN current_finish_contingency:
+				RETURN Dartboard::get_target_index(20, 3)
+		RETURN finish_sequences.at(score).get_first_throw()
+}
+
+
+
+int FinishSequence::get_length()
+{
+	RETURN sequence.size()
+}
+
+int FinishSequence::get_first_throw()
+{
+	IF sequence IS NOT EMPTY:
+		RETURN sequence[0]
+	ELSE:
+		RETURN -1
+}
+
+void FinishSequence::set_sequence(const vector<int> &new_sequence)
+{
+	SET sequence TO new_sequence
+}
+
+bool FinishSequence::get_ends_d16_d20()
+{
+	RETURN ends_d16_d20
+}
+
+void FinishSequence::set_ends_d16_d20(bool new_ends_d16_d20)
+{
+	SET ends_d16_d20 TO new_ends_d16_d20
+}
+
+int FinishSequence::get_contingency()
+{
+	RETURN contingency
+}
+
+void FinishSequence::set_contingency(int new_contingency)
+{
+	SET contingency TO new_contingency
+}
+
+
+
+void ConsoleInterface::clear_screen(int lines)
+{
+	SET string line TO EMPTY STRING
+	REPEAT 100 TIMES:
+		APPEND " " TO line
+	REPEAT lines TIMES:
+		OUTPUT line
+}
+
+void ConsoleInterface::move_cursor(short col, short row)
+{
+	INITIALIZE COORD pos AS { col, row }
+	SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), pos)
+}
+
+
+
+void MainMenu::initialize()
+{
+	Dartboard::initialize()
+	BasicStrategy::initialize()
+	EnhancedStrategy::initialize()
+}
+
+void MainMenu::simulated_game()
+{
+	INITIALIZE int num_matches AS 0
+	OUTPUT "Enter number of matches to simulate: "
+	SET num_matches TO INPUT
+	
+	INITIALIZE int strategy AS 0
+	OUTPUT "Player 1: Sid (73% accuracy, basic strategy)" + NEWLINE
+	OUTPUT "Player 2: Joe (71% accuracy)\n" + NEWLINE
+	OUTPUT "Select Joe's strategy:" + NEWLINE
+	OUTPUT "1. Basic strategy (default)" + NEWLINE
+	OUTPUT "2. Enhanced strategy" + NEWLINE
+	OUTPUT "--> "
+	SET strategy TO INPUT
+	OUTPUT NEWLINE
+
+	initialize()
+
+	
+	INITIALIZE Player joe("Joe", 71, 'e' IF strategy IS 2 ELSE 'b')
+	INITIALIZE Player sid("Sid", 73, 'b')
+	
+	INITIALIZE random_device main_rd
+	INITIALIZE SimulatedGame game(sid, joe, main_rd, 0)
+	game.run_simulation(num_matches, 13, 5)
+	game.output_results()
+	
+	OUTPUT NEWLINE + "Press Enter to exit..."
+	cin.ignore(10000, '\n')
+	cin.get()
+}
+
+void MainMenu::interactive_game()
+{
+	OUTPUT "Player 1: Sid (73% accuracy, basic strategy)" + NEWLINE
+
+	INITIALIZE string name
+	OUTPUT "Player 2: Enter your name (your accuracy: 71%): "
+	SET name TO INPUT
+	ConsoleInterface::move_cursor(0, 0)
+	ConsoleInterface::clear_screen(30)
+	ConsoleInterface::move_cursor(0, 0)
+
+	initialize()
+	INITIALIZE Player sid("Sid", 73, 'b')
+	INITIALIZE Player user(name, 71, 'i')
+
+	INITIALIZE random_device main_rd
+
+	INITIALIZE InteractiveGame game(sid, user, main_rd, -1)
+	game.play_game()
+	
+	OUTPUT NEWLINE + "Press Enter to exit..."
+	cin.ignore(10000, '\n')
+	cin.get()
+}
+
+void MainMenu::test_strategies()
+{
+	OUTPUT "Enter player accuracy" + NEWLINE
+	OUTPUT "--> "
+	INITIALIZE int accuracy AS 0
+	SET accuracy TO input
+	OUTPUT NEWLINE
+
+	initialize()
+	INITIALIZE Player basic("", accuracy, 'b')
+	INITIALIZE Player enhanced("", accuracy, 'e')
+
+	INITIALIZE random_device main_rd
+
+	INITIALIZE SimulatedGame game(basic, enhanced, main_rd, -1)
+	OUTPUT "Basic strategy: "
+	game.run_simulation_single_player(10000, basic.get_id())
+	OUTPUT "Enhanced strategy: "
+	game.run_simulation_single_player(10000, enhanced.get_id())
+	
+	OUTPUT NEWLINE + "Press Enter to exit..."
+	cin.ignore(10000, '\n')
+	cin.get()
+}
+
+void MainMenu::menu()
+{
+	INITIALIZE int option AS 0
+	OUTPUT "Select an option: " + NEWLINE
+	OUTPUT "1. Run simulation" + NEWLINE
+	OUTPUT "2. Play interactive game (maximize console window for best results)" + NEWLINE
+	OUTPUT "3. Test strategies" + NEWLINE
+	OUTPUT "4. Quit" + NEWLINE
+	OUTPUT "--> "
+	SET option TO input
+	ConsoleInterface::move_cursor(0, 0)
+	ConsoleInterface::clear_screen(30)
+	ConsoleInterface::move_cursor(0, 0)
+	
+	IF option EQUALS 1:
+		simulated_game()
+	ELSE IF option EQUALS 2:
+		interactive_game()
+	ELSE IF option EQUALS 3:
+		test_strategies()
+	ELSE IF option EQUALS 4:
+		RETURN
+}
+
+
+
+int main()
+{
+	INITIALIZE MainMenu main_menu
+	main_menu.menu()
+
+	RETURN 0
+}
