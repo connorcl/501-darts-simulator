@@ -1,6 +1,6 @@
 #include "InteractiveGame.h"
 #include <iostream>
-#include "termcolor.hpp"
+#include "termcolor/termcolor.hpp"
 #include <Windows.h>
 #include <algorithm>
 #include <thread>
